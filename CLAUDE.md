@@ -43,6 +43,18 @@ tags: []
 The `receipt_ref` and `bound_hash` fields are added by the script after a check — **you neither
 write nor touch them**.
 
+The script assigns one of two trust tiers (you never set either yourself):
+
+- `trusted` — the receipt is **cryptographically bound** to the page's content hash `H`: the
+  verifier confirmed (via `--expect`) that this exact receipt notarizes `H`. Forging it requires
+  re-notarizing through the network — i.e. it falls back to the key-custody boundary (rule #5).
+- `trusted-mechanical` — the receipt is valid **and** `bound_hash == H`, but the installed
+  verifier cannot bind to `H` (no `--expect`), so the tie to content rests on the plaintext
+  `bound_hash`. This catches accidental/naive edits, but **a holder of a vault write key could
+  forge it** by rewriting `bound_hash` and reusing any valid receipt. Treat it as "consistent,
+  not cryptographically proven". The tier auto-upgrades to `trusted` once a `--expect`-capable
+  verifier is installed and the page is re-certified. (See ISSUE #1.)
+
 ---
 
 ## Naming conventions
@@ -111,21 +123,24 @@ like this:
    3 articles to fill the gaps.
 2. **Grounding and gates** (the script's area): run `python notary.py verify-all` (or
    `verify <page>`). The script checks whether each claim follows from the source, notarizes the
-   verdict, and assigns `status: trusted` to the ones that pass; the ones that fail go to
-   `unverified/`. **You never set `trusted` yourself.**
-3. Run `python notary.py audit-all` — it strips `trusted` from any page changed after
-   notarization.
-4. Report to the human: what became `trusted`, what is in `unverified/` and why
-   (CONTRADICTED / needs source), what you suggest adding.
+   verdict, and assigns `status: trusted` (or `trusted-mechanical` when the verifier can't bind to
+   `H`; see the tiers above) to the ones that pass; the ones that fail go to `unverified/`.
+   **You never set either tier yourself.**
+3. Run `python notary.py audit-all` — it strips the trusted tier from any page changed after
+   notarization, and downgrades `trusted`→`trusted-mechanical` if no `--expect`-capable verifier
+   is present.
+4. Report to the human: what became `trusted` vs `trusted-mechanical`, what is in `unverified/`
+   and why (CONTRADICTED / needs source), what you suggest adding.
 
 ---
 
 ## Iron rules
 
 1. **`raw/` is immutable.** Never edit or delete files there.
-2. **`status: trusted` is set only by `notary.py`, never by you.** You write only `unverified`
-   yourself. "Verified" is a computed property (there is a valid receipt over the current bytes),
-   not a flag you can set.
+2. **`status: trusted`/`trusted-mechanical` is set only by `notary.py`, never by you.** You write
+   only `unverified` yourself. "Verified" is a computed property (there is a valid receipt over the
+   current bytes), not a flag you can set. `trusted-mechanical` is the honest weaker tier — never
+   present it as `trusted`.
 3. **Don't touch `receipts/`, `receipt_ref`, `bound_hash`** — that's machine provenance.
 4. **Don't write a claim without a source** — mark it `[need source]`.
 5. **Access is governed by keys, not by this file.** If you physically lack write permission
@@ -135,6 +150,10 @@ like this:
 7. **"Verified" ≠ "true".** `trusted` means "the named checker confirmed it matches the source",
    not "this is true about the world". If the source lies, the error passes. Don't present
    `trusted` as truth in answers.
+8. **The notary is a witness, not a guard.** A receipt proves *what content was notarized and
+   when* — it does not stop someone who holds a vault write key from rewriting a page and
+   re-notarizing it. Tamper-*evidence*, not tamper-*proofing*. What protects the base is key
+   custody (rule #5); the receipts make any change after the fact detectable, not impossible.
 
 ---
 

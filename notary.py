@@ -430,8 +430,13 @@ def certify_note(path: pathlib.Path, verdict: dict):
     sources = extract_sources(body)
     H = sha256_hex(body.encode("utf-8") + canon(sources) + canon(verdict))  # бинд по body
     receipt = notarize(H)
-    save_receipt("wiki", path.stem, receipt, H, extra={"sources": sources, "verdict": verdict})
-    write_frontmatter(path, {"status": "trusted",
+    # П1: полный 'trusted' честен ТОЛЬКО если verifier криптографически привязывает квитанцию к H
+    # (флаг --expect). Иначе квитанция лишь «валидна» — связь с содержимым держится на открытом
+    # bound_hash, который подделывается тем, у кого есть ключ записи в волт. Тогда — слабый тир.
+    binding = "bound" if _verifier_supports_expect() else "mechanical"
+    save_receipt("wiki", path.stem, receipt, H,
+                 extra={"sources": sources, "verdict": verdict, "binding": binding})
+    write_frontmatter(path, {"status": "trusted" if binding == "bound" else "trusted-mechanical",
                              "receipt_ref": f"receipts/wiki/{path.stem}",
                              "bound_hash": H})
 
@@ -440,21 +445,30 @@ def quarantine(path: pathlib.Path, reason: str):
     UNVERIFIED.mkdir(exist_ok=True)
     shutil.move(str(path), str(UNVERIFIED / path.name))
 
-def is_trusted(path: pathlib.Path) -> bool:
-    """Ворота B: квитанция подлинна (а) И заверённый хеш = хешу ТЕКУЩЕГО содержимого (б)."""
+def is_trusted(path: pathlib.Path) -> str:
+    """Ворота B. Возвращает УРОВЕНЬ доверия (строку, не bool):
+         "bound"      — квитанция криптографически привязана к H (verifier с --expect): подделка
+                        невозможна без перенотаризации (а это уже граница ключей, правило №5);
+         "mechanical" — квитанция валидна И bound_hash == H, НО привязки к H нет: связь с
+                        содержимым держится на открытом bound_hash и подделывается тем, у кого есть
+                        ключ записи в волт. Ловит случайные/наивные правки, не злонамеренную подмену;
+         ""           — не trusted: правка после заверения, либо привязка к H не сошлась.
+       ISSUE п.1: пока релизный verifier не умеет --expect, максимум — 'mechanical'."""
     fm, _ = split_frontmatter(path.read_text(encoding="utf-8"))
     ref = fm.get("receipt_ref")
     if not ref:
-        return False
+        return ""
     sidecar = json.loads((RECEIPTS / "wiki" / f"{path.stem}.json").read_text(encoding="utf-8"))
     body = body_of(path)
     sources = extract_sources(body)
     H = sha256_hex(body.encode("utf-8") + canon(sources) + canon(sidecar["verdict"]))  # (б)
-    # П1-фикс: передаём ожидаемый хеш в verifier — при поддержке --expect квитанция обязана
-    # привязываться именно к H (криптографически); иначе сверка bound_hash ниже ловит правки.
-    if not verify_receipt_offline("wiki", path.stem, expected_hex=H):                # (а)
-        return False
-    return H == fm.get("bound_hash") == sidecar["bound_hash"]
+    # (а) подлинность + (при поддержке --expect) криптопривязка именно к H, fail-closed:
+    if not verify_receipt_offline("wiki", path.stem, expected_hex=H):
+        return ""
+    # (б) сверка bound_hash ловит правки тела/источников/вердикта после заверения:
+    if not (H == fm.get("bound_hash") == sidecar["bound_hash"]):
+        return ""
+    return "bound" if _verifier_supports_expect() else "mechanical"
 
 # ─────────────────────────── команды CLI ───────────────────────────
 
@@ -495,7 +509,8 @@ def _verify_one(path: pathlib.Path):
     verdict = verify_note(path)
     if verdict["status"] == "PASS":
         certify_note(path, verdict)
-        print(f"PASS     {path.name}  → trusted ({verdict['n_claims']} утв.)")
+        tier = "trusted" if _verifier_supports_expect() else "trusted-mechanical"
+        print(f"PASS     {path.name}  → {tier} ({verdict['n_claims']} утв.)")
     else:
         bad = [f"{r['classification']}: {r['text'][:60]}"
                for r in verdict["claims"]
@@ -515,8 +530,14 @@ def cmd_verify_all(args):
 def _audit_one(path: pathlib.Path):
     if not (RECEIPTS / "wiki" / f"{path.stem}.json").exists():
         print(f"—        {path.name}  (нет квитанции, пропуск)"); return
-    if is_trusted(path):
-        print(f"OK       {path.name}  (trusted держится)")
+    level = is_trusted(path)
+    if level == "bound":
+        print(f"OK       {path.name}  (trusted держится, криптопривязка к H)")
+    elif level == "mechanical":
+        # держится по сверке хешей, но без криптопривязки — фиксируем честный слабый статус
+        write_frontmatter(path, {"status": "trusted-mechanical",
+                                 "verify_note": "valid+bound_hash совпали, но verifier без --expect (ISSUE п.1)"})
+        print(f"OK*      {path.name}  (trusted-mechanical: подделываемо при ключе записи, см. ISSUE п.1)")
     else:
         write_frontmatter(path, {"status": "unverified",
                                  "verify_note": "изменено после заверения — trusted снят"})

@@ -37,6 +37,15 @@ of the current text**. Edit the text and the status falls off by itself.
 3. **Audit** — any edit changes the hash; `audit` instantly strips `trusted`.
    "Verified" is a computed property, not a flag taken on faith.
 
+> **The notary is a witness, not a guard.** A receipt proves *what* was notarized and *when* — it
+> makes any later change **detectable** (tamper-evident), not **impossible** (tamper-proof). Anyone
+> holding a vault write key can still rewrite a page and re-notarize it; what protects the base is
+> key custody, not the receipt. Two tiers reflect how strong the tie is: `trusted` means the
+> verifier **cryptographically bound** the receipt to the current content; `trusted-mechanical`
+> means it's valid and the hash matches, but the installed verifier can't bind to the content yet,
+> so the tie rests on a plaintext field a key-holder could forge. Re-certify with a
+> binding-capable verifier to reach full `trusted`.
+
 ---
 
 ## Quick start
