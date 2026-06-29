@@ -170,14 +170,38 @@ def save_receipt(kind: str, stem: str, receipt: dict, bound_hash: str, extra: di
     (d / f"{stem}.json").write_text(json.dumps(sidecar, ensure_ascii=False, indent=2),
                                     encoding="utf-8")
 
-def verify_receipt_offline(kind: str, stem: str) -> bool:
+_EXPECT_FLAG = None   # кэш: поддерживает ли установленный verifier привязку к ожидаемому хешу
+
+def _verifier_supports_expect() -> bool:
+    """Один раз спрашиваем у verifier его help и ищем флаг привязки (--expect/--expected-digest)."""
+    global _EXPECT_FLAG
+    if _EXPECT_FLAG is not None:
+        return _EXPECT_FLAG
+    try:
+        h = subprocess.run([VERIFIER, "verify", "--help"],
+                           capture_output=True, text=True)
+        help_txt = (h.stdout or "") + (h.stderr or "")
+    except FileNotFoundError:
+        sys.exit(f"Не найден verifier '{VERIFIER}'. Скачай timelayer-verifier и задай TL_VERIFIER.")
+    _EXPECT_FLAG = "--expect" if "--expect" in help_txt else ""
+    return bool(_EXPECT_FLAG)
+
+def verify_receipt_offline(kind: str, stem: str, expected_hex: str | None = None) -> bool:
+    """Проверяет квитанцию офлайн. Если задан expected_hex И verifier умеет --expect —
+       квитанция обязана криптографически привязываться именно к этому хешу (fail-closed).
+       Если verifier ещё не умеет привязку, expected_hex проверяется на верхнем уровне
+       (is_trusted) сверкой bound_hash — это ловит правки тела/источников, но НЕ злонамеренную
+       подмену квитанции при наличии ключа записи (граница угрозы — правило №5 в CLAUDE.md:
+       доступом управляют ключи). См. ISSUE п.1."""
     d = RECEIPTS / kind
     cert, bundle = d / f"{stem}.tlcert", d / f"{stem}.tlbundle"
     if not cert.exists():
         return False
+    args = [VERIFIER, "verify", str(cert), str(bundle)]
+    if expected_hex and _verifier_supports_expect():
+        args += ["--expect", expected_hex]   # привязка к ожидаемому action_hex (fail-closed)
     try:
-        rc = subprocess.run([VERIFIER, "verify", str(cert), str(bundle)],
-                            capture_output=True).returncode
+        rc = subprocess.run(args, capture_output=True).returncode
         return rc == 0
     except FileNotFoundError:
         sys.exit(f"Не найден verifier '{VERIFIER}'. Скачай timelayer-verifier и задай TL_VERIFIER.")
@@ -192,12 +216,22 @@ def extract_sources(body: str) -> list[dict]:
     return sorted(({"ref": ref, "version": ver} for ref, ver in seen),
                   key=lambda s: (s["ref"], s["version"]))
 
+def _within(p: pathlib.Path, root: pathlib.Path) -> bool:
+    """True, только если p физически лежит ВНУТРИ root (после резолва симлинков/..)."""
+    try:
+        rp = p.resolve()
+    except Exception:
+        return False
+    return str(rp).startswith(str(root.resolve()) + os.sep)
+
 def fetch_fragment(ref: str, version: str):
     """Достаёт фрагмент из raw/ по ref (с опц. #Lx-Ly) и сверяет хеш версии источника."""
     m = re.match(r"(.+?)(?:#L(\d+)-L(\d+))?$", ref)
     rel, l1, l2 = m.group(1), m.group(2), m.group(3)
     path = VAULT / rel
-    if not path.exists():
+    # П4-фикс: якорь обязан указывать ПОД raw/ — иначе `raw/../../secret` уводил чтение
+    # за пределы волта (фрагмент мог осесть в evidence_span). Ограничиваем поддеревом raw/.
+    if not _within(path, VAULT / "raw") or not path.exists():
         return "", False
     raw_bytes = path.read_bytes()
     src_ok = (sha256_hex(raw_bytes) == version)   # точное сравнение полного sha256
@@ -310,11 +344,60 @@ def check_with_judge(claim, frag, k: int = 5) -> dict:
 
 # ─────────────── оркестрация проверки одной страницы ───────────────
 
+# Чем меньше число — тем строже вердикт (выигрывает худший из применённых проверок).
+_VERDICT_ORDER = {"CONTRADICTED": 0, "INSUFFICIENT": 1, "SUPPORTED": 2}
+
 def route(claim, frag) -> dict:
-    if claim["kind"] == "number":    return {**check_number(claim, frag),   "method": "mechanical"}
-    if claim["kind"] == "quote":     return {**check_quote(claim, frag),    "method": "mechanical"}
-    if claim["kind"] == "structure": return {**check_structure(claim, frag),"method": "mechanical"}
-    return {**check_with_judge(claim, frag), "method": "model"}
+    """П2-фикс: гоним ВСЕ применимые проверки и берём строжайший вердикт.
+       Раньше число/цитата уводили утверждение в один механический чек и его СМЫСЛ
+       судья не видел («Спрос упал на 30%», где в источнике 30 — но про рост): цифра
+       совпадала → SUPPORTED, хотя смысл противоречит. Теперь если задан судья (TL_JUDGE_CMD),
+       он голосует по ЛЮБОМУ утверждению вдобавок к механике, и противоречие смысла валит чек."""
+    checks = []  # (method, result)
+    if re.search(r"\d", claim["text"]):
+        checks.append(("mechanical", check_number(claim, frag)))
+    if re.search(r"[«\"“].+?[»\"”]", claim["text"]):
+        checks.append(("mechanical", check_quote(claim, frag)))
+    if os.environ.get("TL_JUDGE_CMD"):                 # семантика — для любого утверждения
+        checks.append(("model", check_with_judge(claim, frag)))
+    if not checks:                                     # ни цифр/цитат, ни судьи
+        checks.append(("model", {"classification": "INSUFFICIENT", "evidence_span": ""}))
+    method, worst = min(checks, key=lambda c: _VERDICT_ORDER.get(c[1]["classification"], 1))
+    return {"classification": worst["classification"],
+            "evidence_span": worst.get("evidence_span", ""),
+            "method": "+".join(sorted({m for m, _ in checks}))}
+
+# ─────────────── П3-фикс: фактические предложения без указателя ───────────────
+
+# Заголовки/служебные секции и блоки, где якорь не требуется (связи, теги, шаблоны кода).
+_SKIP_LINE = re.compile(r"^\s*(#{1,6}\s|[-*]\s*\[\[|>\s|\||```|:?-{3,}|<|\d+\.\s*\[\[)")
+_SECTION_SKIP = re.compile(r"^\s*#{1,6}\s*(related|sources|see also|links|"
+                           r"связанн|источник|см\.?\s*также|ссылк|теги|tags)", re.I)
+# Фактическим считаем предложение с цифрой, кавычками-цитатой или утвердительной длиной.
+_HAS_FACT = re.compile(r"\d|[«\"“].+?[»\"”]")
+
+def find_unanchored(body: str) -> list[str]:
+    """Возвращает фактические предложения тела, у которых НЕТ указателя на источник.
+       Дисциплина привязки (CLAUDE.md): без источника утверждение писать нельзя — должно
+       стоять [нужен источник]. Раньше такие строки молча игнорировались и страница могла
+       стать trusted с непривязанной (возможно ложной) фактурой между нормальными ссылками."""
+    out, in_skip = [], False
+    for line in body.splitlines():
+        if _SECTION_SKIP.match(line):
+            in_skip = True; continue
+        if line.strip().startswith("#"):
+            in_skip = bool(_SECTION_SKIP.match(line))
+        if in_skip:
+            continue
+        if not line.strip() or _SKIP_LINE.match(line):
+            continue
+        if ANCHOR.search(line):                        # уже привязано — ок
+            continue
+        if "[нужен источник]" in line or "[need source]" in line:
+            continue                                    # честно помечено — это разрешено
+        if _HAS_FACT.search(line) or len(line.strip()) > 80:
+            out.append(line.strip()[:120])
+    return out
 
 def rollup(results: list[dict]) -> str:
     if not results:                                                  return "NO_CLAIMS"
@@ -334,7 +417,11 @@ def verify_note(path: pathlib.Path) -> dict:
             continue
         results.append({**c, "source_hash_ok": True, **route(c, frag)})  # П3–П5
     status = rollup(results)                                          # П6
-    return {"note": path.name, "status": status, "n_claims": len(results), "claims": results}
+    unanchored = find_unanchored(body)                               # П3-фикс
+    if unanchored and status in ("PASS", "NO_CLAIMS"):
+        status = "NEEDS_SOURCE"                                       # есть непривязанная фактура
+    return {"note": path.name, "status": status, "n_claims": len(results),
+            "claims": results, "unanchored": unanchored}
 
 # ─────────────── ступень 4 + ворота A/B ───────────────
 
@@ -359,12 +446,14 @@ def is_trusted(path: pathlib.Path) -> bool:
     ref = fm.get("receipt_ref")
     if not ref:
         return False
-    if not verify_receipt_offline("wiki", path.stem):                # (а)
-        return False
     sidecar = json.loads((RECEIPTS / "wiki" / f"{path.stem}.json").read_text(encoding="utf-8"))
     body = body_of(path)
     sources = extract_sources(body)
     H = sha256_hex(body.encode("utf-8") + canon(sources) + canon(sidecar["verdict"]))  # (б)
+    # П1-фикс: передаём ожидаемый хеш в verifier — при поддержке --expect квитанция обязана
+    # привязываться именно к H (криптографически); иначе сверка bound_hash ниже ловит правки.
+    if not verify_receipt_offline("wiki", path.stem, expected_hex=H):                # (а)
+        return False
     return H == fm.get("bound_hash") == sidecar["bound_hash"]
 
 # ─────────────────────────── команды CLI ───────────────────────────
@@ -411,6 +500,8 @@ def _verify_one(path: pathlib.Path):
         bad = [f"{r['classification']}: {r['text'][:60]}"
                for r in verdict["claims"]
                if r["classification"] != "SUPPORTED" or not r["source_hash_ok"]]
+        for u in verdict.get("unanchored", []):
+            bad.append(f"НЕТ ИСТОЧНИКА: {u[:60]}")     # П3-фикс: показать непривязанную фактуру
         quarantine(path, verdict["status"] + "; " + " | ".join(bad[:5]))
         print(f"{verdict['status']:8} {path.name}  → unverified/  ({'; '.join(bad[:3])})")
 

@@ -1,3 +1,3 @@
 # Log
 
-append-only лог операций.
+An append-only log of operations.

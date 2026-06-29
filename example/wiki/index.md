@@ -1,3 +1,3 @@
 # Index
 
-Каталог страниц вики по доменам.
+A catalog of wiki pages by domain.

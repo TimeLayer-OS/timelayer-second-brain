@@ -3,18 +3,18 @@ type: concept
 domain: example
 created: 2026-06-29
 updated: 2026-06-29
-sources: ["[[raw/articles/2026-06-29-sample.md]]@eb18fd03ad7ef39746d2a39b06f7b2ef358dbd77ac5df522f4e277c639b543c9"]
+sources: ["[[raw/articles/2026-06-29-sample.md]]@e1bf7375dc6c6854c521dc20c2e7ec6ffff85d045656b4c3c657c241c9e94992"]
 status: unverified
 tags: []
 ---
 
-# Пример страницы
+# Example page
 
 ## Key Details
 
-- В пилоте участвовало 42 пользователя. ^[[raw/articles/2026-06-29-sample.md#L3-L3|src:sample@eb18fd03ad7ef39746d2a39b06f7b2ef358dbd77ac5df522f4e277c639b543c9]]
-- Команда формулирует принцип так: «проверка должна быть обязательной». ^[[raw/articles/2026-06-29-sample.md#L4-L4|src:sample@eb18fd03ad7ef39746d2a39b06f7b2ef358dbd77ac5df522f4e277c639b543c9]]
+- 42 users took part in the pilot. ^[[raw/articles/2026-06-29-sample.md#L3-L3|src:sample@e1bf7375dc6c6854c521dc20c2e7ec6ffff85d045656b4c3c657c241c9e94992]]
+- The team states the principle this way: "verification must be mandatory". ^[[raw/articles/2026-06-29-sample.md#L4-L4|src:sample@e1bf7375dc6c6854c521dc20c2e7ec6ffff85d045656b4c3c657c241c9e94992]]
 
 ## Sources
 
-- [[raw/articles/2026-06-29-sample.md]]@eb18fd03ad7ef39746d2a39b06f7b2ef358dbd77ac5df522f4e277c639b543c9
+- [[raw/articles/2026-06-29-sample.md]]@e1bf7375dc6c6854c521dc20c2e7ec6ffff85d045656b4c3c657c241c9e94992
