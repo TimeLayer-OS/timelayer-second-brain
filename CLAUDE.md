@@ -43,17 +43,25 @@ tags: []
 The `receipt_ref` and `bound_hash` fields are added by the script after a check — **you neither
 write nor touch them**.
 
-The script assigns one of two trust tiers (you never set either yourself):
+The script assigns one of two trust tiers (you never set either yourself). Full `trusted` requires
+**both** of two independent guarantees; missing either one drops the page to `trusted-mechanical`:
 
-- `trusted` — the receipt is **cryptographically bound** to the page's content hash `H`: the
-  verifier confirmed (via `--expect`) that this exact receipt notarizes `H`. Forging it requires
-  re-notarizing through the network — i.e. it falls back to the key-custody boundary (rule #5).
-- `trusted-mechanical` — the receipt is valid **and** `bound_hash == H`, but the installed
-  verifier cannot bind to `H` (no `--expect`), so the tie to content rests on the plaintext
-  `bound_hash`. This catches accidental/naive edits, but **a holder of a vault write key could
-  forge it** by rewriting `bound_hash` and reusing any valid receipt. Treat it as "consistent,
-  not cryptographically proven". The tier auto-upgrades to `trusted` once a `--expect`-capable
-  verifier is installed and the page is re-certified. (See ISSUE #1.)
+- `trusted` — (1) the receipt is **cryptographically bound** to the page's content hash `H`: the
+  verifier confirmed (via `--expect`) that this exact receipt notarizes `H` (forging it requires
+  re-notarizing through the network — the key-custody boundary, rule #5); **and** (2) the meaning
+  of **every** claim was checked by the semantic judge (`TL_JUDGE_CMD`), not only matched
+  mechanically.
+- `trusted-mechanical` — valid and `bound_hash == H`, but **at least one** of the two guarantees
+  is missing, so it's "consistent, not proven to the end":
+  - *no crypto binding* — the installed verifier can't bind to `H` (no `--expect`), so the tie to
+    content rests on the plaintext `bound_hash`; **a holder of a vault write key could forge it**
+    by rewriting `bound_hash` and reusing any valid receipt. (ISSUE #1 — closed by verifier
+    v1.4.0; auto-upgrades to `trusted` once that verifier is installed and the page re-certified.)
+  - *no semantic judge* — without `TL_JUDGE_CMD`, a claim passes on mechanical presence alone (the
+    number/quote appears in the source) but its **meaning** is unchecked: "demand fell 30%" passes
+    against a source that says 30 about growth. Such pages stay `trusted-mechanical` until a judge
+    is configured and they are re-certified. (ISSUE #2.)
+  The page's `verify_note` field records which guarantee(s) are missing.
 
 ---
 
@@ -124,11 +132,11 @@ like this:
 2. **Grounding and gates** (the script's area): run `python notary.py verify-all` (or
    `verify <page>`). The script checks whether each claim follows from the source, notarizes the
    verdict, and assigns `status: trusted` (or `trusted-mechanical` when the verifier can't bind to
-   `H`; see the tiers above) to the ones that pass; the ones that fail go to `unverified/`.
-   **You never set either tier yourself.**
+   `H` **or** no semantic judge ran; see the tiers above) to the ones that pass; the ones that
+   fail go to `unverified/`. **You never set either tier yourself.**
 3. Run `python notary.py audit-all` — it strips the trusted tier from any page changed after
-   notarization, and downgrades `trusted`→`trusted-mechanical` if no `--expect`-capable verifier
-   is present.
+   notarization, and recomputes the tier: `trusted`→`trusted-mechanical` if no `--expect`-capable
+   verifier is present or the page's claims were never judged.
 4. Report to the human: what became `trusted` vs `trusted-mechanical`, what is in `unverified/`
    and why (CONTRADICTED / needs source), what you suggest adding.
 

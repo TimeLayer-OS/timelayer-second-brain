@@ -425,20 +425,54 @@ def verify_note(path: pathlib.Path) -> dict:
 
 # ─────────────── ступень 4 + ворота A/B ───────────────
 
-def certify_note(path: pathlib.Path, verdict: dict):
+def _fully_judged(verdict: dict) -> bool:
+    """True, если КАЖДОЕ утверждение страницы получило голос судьи (в method есть 'model').
+       Без TL_JUDGE_CMD судья молчит → смысл утверждений не проверен: механическое совпадение
+       числа/цитаты НЕ доказывает, что утверждение следует из источника по СМЫСЛУ
+       («спрос упал на 30%», где в источнике 30 — но про рост). ISSUE п.2 (остаток): такую
+       страницу нельзя считать полным 'trusted' — только слабый тир."""
+    claims = verdict.get("claims", [])
+    return bool(claims) and all("model" in (c.get("method", "") or "") for c in claims)
+
+def _trust_tier(bound: bool, judged: bool) -> str:
+    """Полный 'trusted' = криптопривязка к содержимому (verifier --expect) И каждое утверждение
+       проверено судьёй по смыслу. Любая из двух слабостей → честный слабый тир
+       'trusted-mechanical' (валидно и консистентно, но не доказано до конца)."""
+    return "trusted" if (bound and judged) else "trusted-mechanical"
+
+def _tier_reason(bound: bool, judged: bool) -> str:
+    if bound and judged:
+        return "trusted: криптопривязка квитанции к H + смысл проверен судьёй"
+    miss = []
+    if not bound:
+        miss.append("verifier без --expect (нет криптопривязки к содержимому, ISSUE п.1)")
+    if not judged:
+        miss.append("без судьи: смысл утверждений не проверен, только механика (ISSUE п.2)")
+    return "trusted-mechanical: " + "; ".join(miss)
+
+def certify_note(path: pathlib.Path, verdict: dict) -> str:
     body = body_of(path)
     sources = extract_sources(body)
     H = sha256_hex(body.encode("utf-8") + canon(sources) + canon(verdict))  # бинд по body
     receipt = notarize(H)
-    # П1: полный 'trusted' честен ТОЛЬКО если verifier криптографически привязывает квитанцию к H
-    # (флаг --expect). Иначе квитанция лишь «валидна» — связь с содержимым держится на открытом
-    # bound_hash, который подделывается тем, у кого есть ключ записи в волт. Тогда — слабый тир.
-    binding = "bound" if _verifier_supports_expect() else "mechanical"
+    # Полный 'trusted' честен ТОЛЬКО при двух условиях сразу:
+    #  (1) verifier криптографически привязывает квитанцию к H (флаг --expect) — иначе связь с
+    #      содержимым держится на открытом bound_hash, подделываемом держателем ключа записи (п.1);
+    #  (2) смысл каждого утверждения проверен судьёй — иначе чисто механическое совпадение
+    #      числа/цитаты не доказывает следование из источника по смыслу (п.2).
+    # Нет любого из условий → честный слабый тир 'trusted-mechanical'.
+    bound = _verifier_supports_expect()
+    judged = _fully_judged(verdict)
+    status = _trust_tier(bound, judged)
     save_receipt("wiki", path.stem, receipt, H,
-                 extra={"sources": sources, "verdict": verdict, "binding": binding})
-    write_frontmatter(path, {"status": "trusted" if binding == "bound" else "trusted-mechanical",
+                 extra={"sources": sources, "verdict": verdict,
+                        "binding": "bound" if bound else "mechanical",
+                        "fully_judged": judged})
+    write_frontmatter(path, {"status": status,
                              "receipt_ref": f"receipts/wiki/{path.stem}",
-                             "bound_hash": H})
+                             "bound_hash": H,
+                             "verify_note": _tier_reason(bound, judged)})
+    return status
 
 def quarantine(path: pathlib.Path, reason: str):
     write_frontmatter(path, {"status": "unverified", "verify_note": reason})
@@ -453,7 +487,10 @@ def is_trusted(path: pathlib.Path) -> str:
                         содержимым держится на открытом bound_hash и подделывается тем, у кого есть
                         ключ записи в волт. Ловит случайные/наивные правки, не злонамеренную подмену;
          ""           — не trusted: правка после заверения, либо привязка к H не сошлась.
-       ISSUE п.1: пока релизный verifier не умеет --expect, максимум — 'mechanical'."""
+       Это лишь крипто-целостность квитанции. Итоговый тир страницы ('trusted' vs
+       'trusted-mechanical') считают certify_note/_audit_one: к 'bound' добавляется
+       требование судьи по смыслу (_fully_judged, ISSUE п.2). С verifier'ом v1.4.0+
+       (--expect) уровень здесь — 'bound'; 'mechanical' остаётся для старых verifier'ов."""
     fm, _ = split_frontmatter(path.read_text(encoding="utf-8"))
     ref = fm.get("receipt_ref")
     if not ref:
@@ -508,9 +545,10 @@ def cmd_ingest_source(args):
 def _verify_one(path: pathlib.Path):
     verdict = verify_note(path)
     if verdict["status"] == "PASS":
-        certify_note(path, verdict)
-        tier = "trusted" if _verifier_supports_expect() else "trusted-mechanical"
-        print(f"PASS     {path.name}  → {tier} ({verdict['n_claims']} утв.)")
+        tier = certify_note(path, verdict)
+        note = "" if tier == "trusted" else \
+            f"  [{_tier_reason(_verifier_supports_expect(), _fully_judged(verdict)).split(': ', 1)[1]}]"
+        print(f"PASS     {path.name}  → {tier} ({verdict['n_claims']} утв.){note}")
     else:
         bad = [f"{r['classification']}: {r['text'][:60]}"
                for r in verdict["claims"]
@@ -530,18 +568,22 @@ def cmd_verify_all(args):
 def _audit_one(path: pathlib.Path):
     if not (RECEIPTS / "wiki" / f"{path.stem}.json").exists():
         print(f"—        {path.name}  (нет квитанции, пропуск)"); return
-    level = is_trusted(path)
-    if level == "bound":
-        print(f"OK       {path.name}  (trusted держится, криптопривязка к H)")
-    elif level == "mechanical":
-        # держится по сверке хешей, но без криптопривязки — фиксируем честный слабый статус
-        write_frontmatter(path, {"status": "trusted-mechanical",
-                                 "verify_note": "valid+bound_hash совпали, но verifier без --expect (ISSUE п.1)"})
-        print(f"OK*      {path.name}  (trusted-mechanical: подделываемо при ключе записи, см. ISSUE п.1)")
-    else:
+    level = is_trusted(path)          # "bound" | "mechanical" | "" — крипто-целостность квитанции
+    if not level:
         write_frontmatter(path, {"status": "unverified",
                                  "verify_note": "изменено после заверения — trusted снят"})
         print(f"СНЯТ     {path.name}  → trusted снят (изменено после заверения)")
+        return
+    # целостность держится — теперь страничный тир с учётом семантики (тот же закон, что в certify):
+    sidecar = json.loads((RECEIPTS / "wiki" / f"{path.stem}.json").read_text(encoding="utf-8"))
+    bound = (level == "bound")
+    judged = _fully_judged(sidecar.get("verdict", {}))
+    status = _trust_tier(bound, judged)
+    write_frontmatter(path, {"status": status, "verify_note": _tier_reason(bound, judged)})
+    if status == "trusted":
+        print(f"OK       {path.name}  (trusted держится, криптопривязка к H + судья)")
+    else:
+        print(f"OK*      {path.name}  ({_tier_reason(bound, judged)})")
 
 def cmd_audit(args):
     _audit_one(pathlib.Path(args.note))

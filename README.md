@@ -40,11 +40,13 @@ of the current text**. Edit the text and the status falls off by itself.
 > **The notary is a witness, not a guard.** A receipt proves *what* was notarized and *when* — it
 > makes any later change **detectable** (tamper-evident), not **impossible** (tamper-proof). Anyone
 > holding a vault write key can still rewrite a page and re-notarize it; what protects the base is
-> key custody, not the receipt. Two tiers reflect how strong the tie is: `trusted` means the
-> verifier **cryptographically bound** the receipt to the current content; `trusted-mechanical`
-> means it's valid and the hash matches, but the installed verifier can't bind to the content yet,
-> so the tie rests on a plaintext field a key-holder could forge. Re-certify with a
-> binding-capable verifier to reach full `trusted`.
+> key custody, not the receipt. Two tiers reflect how fully a page is proven: full `trusted` needs
+> **both** a cryptographic binding of the receipt to the current content (`--expect`) **and** a
+> semantic judge vote on every claim. `trusted-mechanical` means valid and the hash matches, but
+> one guarantee is missing — either the installed verifier can't bind to the content (the tie rests
+> on a plaintext field a key-holder could forge) **or** no judge ran, so a claim passed on a
+> mechanical number/quote match without its meaning being checked. Install a binding-capable
+> verifier, set `TL_JUDGE_CMD`, and re-certify to reach full `trusted`.
 
 ---
 
