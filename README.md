@@ -1,123 +1,125 @@
-# Второй мозг на квитанциях
+# A second brain on receipts
 
-**База знаний, которую ведёт не ваша рука — и которая не может тихо соврать.**
+**English** · [Русский](README.ru.md)
 
-Паттерн [LLM Knowledge Base Андрея Карпатого](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f)
-(`raw/` → `wiki/`, цикл Ingest/Query/Lint) плюс **нотариальный слой корректности** на
-квитанциях [TimeLayer](https://timelayer-os.com): каждое утверждение в вики привязано к
-фрагменту источника, а статус «проверено» — это не галочка, а **квитанция на хеш текущего
-текста**. Поправил текст — статус слетел сам.
+**A knowledge base your hand doesn't keep — and that cannot quietly lie.**
 
-> **Честная модель.** Квитанция доказывает, что *проверка прошла ровно над этими словами,
-> кто за неё отвечает и что текст не менялся потом*. Она **не** доказывает, что содержимое
-> истинно. Заверенная ошибка — всё ещё ошибка, просто теперь видно, кто и что проверил.
-> Корректность даёт проверяющий (механика/модель/человек), а не сама квитанция.
+Andrej Karpathy's [LLM Knowledge Base](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f)
+pattern (`raw/` → `wiki/`, the Ingest/Query/Lint cycle) plus a **notarial correctness layer**
+on [TimeLayer](https://timelayer-os.com) receipts: every claim in the wiki is anchored to a
+source fragment, and the status "verified" is not a checkbox — it's a **receipt over the hash
+of the current text**. Edit the text and the status falls off by itself.
+
+> **The honest model.** A receipt proves that *a check ran over exactly these words, who is
+> accountable for it, and that the text was not changed afterwards*. It does **not** prove the
+> content is true. A notarized error is still an error — only now it's visible who checked what.
+> Correctness comes from the checker (mechanics / model / human), not from the receipt itself.
 
 ---
 
-## Что внутри
+## What's inside
 
-| Файл | Что это |
+| File | What it is |
 |---|---|
-| `brain-notary-guide.md` | Полное руководство: зачем, как устроено, как собрать с нуля |
-| `CLAUDE.md` | Конституция агента-мейнтейнера (положите в корень своего волта) |
-| `notary.py` | CLI-слой: заверение источников, grounding-проверка, ворота trusted |
-| `wiki/_templates/page.md` | Шаблон вики-страницы с дисциплиной привязки к источнику |
-| `example/` | Рабочий пример: источник + страница, которая проходит проверку |
+| `brain-notary-guide.md` | The full guide: why, how it works, how to build it from scratch |
+| `CLAUDE.md` | Constitution for the maintainer agent (drop it in the root of your vault) |
+| `notary.py` | The CLI layer: notarizing sources, grounding checks, the trusted gate |
+| `wiki/_templates/page.md` | Wiki-page template with source-anchoring discipline |
+| `example/` | A working example: a source + a page that passes verification |
 
-## Как это работает в трёх словах
+## How it works in three words
 
-1. **Ingest** — кладёте источник в `raw/`, агент пишет страницы в `wiki/`, каждое
-   утверждение — с указателем на конкретный фрагмент источника и хеш его версии.
-2. **Verify** — `notary.py` сверяет утверждения с источником (числа и цитаты — механически,
-   смысл — моделью-судьёй), и на прошедшие берёт у сети **квитанцию**, привязанную к хешу
-   `текст + источники + вердикт`. Только тогда страница становится `trusted`.
-3. **Audit** — любая правда меняет хеш; `audit` мгновенно снимает `trusted`.
-   «Проверено» — вычисляемое свойство, а не флаг, которому верят на слово.
+1. **Ingest** — you put a source in `raw/`, the agent writes pages in `wiki/`, every claim
+   carries a pointer to a specific source fragment and the hash of its version.
+2. **Verify** — `notary.py` checks claims against the source (numbers and quotes mechanically,
+   meaning via a judge model), and for those that pass it takes a **receipt** from the network,
+   bound to the hash of `text + sources + verdict`. Only then does the page become `trusted`.
+3. **Audit** — any edit changes the hash; `audit` instantly strips `trusted`.
+   "Verified" is a computed property, not a flag taken on faith.
 
 ---
 
-## Быстрый старт
+## Quick start
 
-Работает на **Linux, macOS и Windows**. Нужен только Python 3.8+ и одна библиотека.
+Works on **Linux, macOS and Windows**. You only need Python 3.8+ and one library.
 
-**1. Зависимости**
+**1. Dependencies**
 ```bash
-pip install -r requirements.txt        # это всего лишь pyyaml; остальное — стандартная библиотека
+pip install -r requirements.txt        # this is just pyyaml; everything else is the standard library
 ```
 
-**2. Купите квитанции и выпустите токен.** Квитанции — это «топливо» проверки: каждое
-заверение тратит одну. Заведите аккаунт и купите пакет на **https://timelayer-os.com**,
-затем в кабинете https://cabinet.timelayer-os.com выпустите `api_token`.
+**2. Buy receipts and issue a token.** Receipts are the "fuel" of verification: each
+notarization spends one. Create an account and buy a pack at **https://timelayer-os.com**,
+then issue an `api_token` in the cabinet at https://cabinet.timelayer-os.com.
 
-**3. Скачайте оффлайн-верификатор** под свою ОС (Linux / macOS / Windows) со страницы
-релизов: **https://github.com/TimeLayer-OS/timelayer-verifier/releases**.
+**3. Download the offline verifier** for your OS (Linux / macOS / Windows) from the releases
+page: **https://github.com/TimeLayer-OS/timelayer-verifier/releases**.
 
-**4. Задайте окружение**
+**4. Set the environment**
 
 Linux / macOS:
 ```bash
-export TIMELAYER_TOKEN=<ваш токен>
-export TL_VERIFIER=/путь/к/timelayer-verifier
+export TIMELAYER_TOKEN=<your token>
+export TL_VERIFIER=/path/to/timelayer-verifier
 ```
 Windows (PowerShell):
 ```powershell
-$env:TIMELAYER_TOKEN = "<ваш токен>"
-$env:TL_VERIFIER = "C:\путь\к\timelayer-verifier.exe"
+$env:TIMELAYER_TOKEN = "<your token>"
+$env:TL_VERIFIER = "C:\path\to\timelayer-verifier.exe"
 ```
 
-**5. Разверните волт и прогоните пример** (одинаково на любой ОС):
+**5. Scaffold a vault and run the example** (identical on every OS):
 ```bash
-python notary.py init my-vault            # создаёт структуру волта без shell-команд
-python notary.py ingest-source example/raw/articles/2026-06-29-sample.md   # заверить источник
+python notary.py init my-vault            # creates the vault structure with no shell commands
+python notary.py ingest-source example/raw/articles/2026-06-29-sample.md   # notarize the source
 python notary.py verify example/wiki/sample-page.md      # → PASS → trusted
-python notary.py audit  example/wiki/sample-page.md      # → trusted держится
-#  поправьте число в странице — и снова audit → trusted снят
+python notary.py audit  example/wiki/sample-page.md      # → trusted holds
+#  edit a number in the page — run audit again → trusted is stripped
 ```
-> Для примера задайте корень волта: `VAULT=example` (Linux/macOS) или
-> `$env:VAULT="example"` (Windows), либо запускайте из папки `example`.
+> For the example, set the vault root: `VAULT=example` (Linux/macOS) or
+> `$env:VAULT="example"` (Windows), or run from inside the `example` folder.
 
-### Команды
+### Commands
 
 ```
-python notary.py init [dir]                # развернуть структуру волта (кросс-платформенно)
-python notary.py hash <raw-файл>           # sha256 источника (для указателей в wiki)
-python notary.py ingest-source <raw-файл>  # хеш + квитанция источника
-python notary.py verify <wiki-страница>    # grounding + квитанция + ворота trusted
-python notary.py verify-all                # то же по всем страницам wiki/
-python notary.py audit  <wiki-страница>    # снять trusted, если изменено после заверения
+python notary.py init [dir]                # scaffold the vault structure (cross-platform)
+python notary.py hash <raw-file>           # sha256 of a source (for pointers in wiki)
+python notary.py ingest-source <raw-file>  # hash + source receipt
+python notary.py verify <wiki-page>        # grounding + receipt + trusted gate
+python notary.py verify-all                # same across all wiki/ pages
+python notary.py audit  <wiki-page>        # strip trusted if changed after notarization
 python notary.py audit-all
 ```
 
 ---
 
-## Проверяющий-судья (для смысловых утверждений)
+## The judge (for semantic claims)
 
-Числа и цитаты сверяются механически и работают сразу. Смысловые утверждения проверяет
-**модель-судья** — задайте её командой:
+Numbers and quotes are checked mechanically and work out of the box. Semantic claims are
+checked by a **judge model** — set it with a command:
 
 ```bash
-export TL_JUDGE_CMD='python my_judge.py'   # читает промпт со stdin → печатает {"cls":...,"span":...}
+export TL_JUDGE_CMD='python my_judge.py'   # reads the prompt from stdin → prints {"cls":...,"span":...}
 ```
 
-Берите для судьи **другое семейство моделей**, чем то, что писало вики (декорреляция ошибок).
-Если `TL_JUDGE_CMD` не задан — смысловые утверждения помечаются как непроверенные
-(fail-closed): страница не получит `trusted`, пока вы не подключите судью или не подтвердите
-её вручную. Лучше «не заверено», чем «заверено зря».
+Use a **different model family** for the judge than the one that wrote the wiki (error
+decorrelation). If `TL_JUDGE_CMD` is not set, semantic claims are marked unverified
+(fail-closed): the page won't get `trusted` until you wire up a judge or confirm it by hand.
+Better "not notarized" than "notarized for nothing."
 
 ---
 
-## Переменные окружения
+## Environment variables
 
-| Переменная | Назначение |
+| Variable | Purpose |
 |---|---|
-| `TIMELAYER_TOKEN` | api_token из кабинета (обязательно для заверения) |
-| `VAULT` | корень волта (по умолчанию текущая папка) |
-| `TL_VERIFIER` | путь к бинарю `timelayer-verifier` (по умолчанию из `PATH`) |
-| `TL_JUDGE_CMD` | команда модели-судьи (опционально) |
+| `TIMELAYER_TOKEN` | api_token from the cabinet (required to notarize) |
+| `VAULT` | the vault root (defaults to the current folder) |
+| `TL_VERIFIER` | path to the `timelayer-verifier` binary (defaults to `PATH`) |
+| `TL_JUDGE_CMD` | the judge-model command (optional) |
 
 ---
 
-## Лицензия
+## License
 
 [Apache-2.0](LICENSE).
