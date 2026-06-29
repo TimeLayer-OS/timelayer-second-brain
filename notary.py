@@ -8,6 +8,7 @@ notary.py — нотариальный слой корректности для 
               TL_VERIFIER      — путь к бинарю timelayer-verifier (по умолчанию из PATH)
 
 Команды:
+  python notary.py init [dir]               # развернуть структуру волта (кросс-платформенно)
   python notary.py hash <raw-file>          # sha256 источника (для указателей в wiki)
   python notary.py ingest-source <raw-file> # хеш + квитанция источника  (ступень 1)
   python notary.py verify <wiki-note.md>     # grounding + квитанция + ворота A  (ступени 3–5)
@@ -48,6 +49,39 @@ UNVERIFIED  = VAULT / "unverified"
 API_NOTARIZE = "https://api.timelayer-os.com/v1/notarize"
 VERIFIER    = os.environ.get("TL_VERIFIER", "timelayer-verifier")
 SKIP        = {"index.md", "log.md"}          # служебные файлы wiki, не страницы
+
+PAGE_TEMPLATE = """---
+type: concept
+domain: <домен>
+created: <YYYY-MM-DD>
+updated: <YYYY-MM-DD>
+sources: []
+status: unverified
+tags: []
+---
+
+# Название страницы
+
+## Summary
+
+1–2 абзаца обзора. Фактические утверждения привязывай к источникам.
+
+## Key Details
+
+Каждое фактическое утверждение — с указателем на конкретный фрагмент источника:
+
+- Утверждение с числом или фактом. ^[[raw/articles/<файл>.md#L10-L18|src:<имя>@<полный_sha256>]]
+
+Числа, даты и цитаты пиши дословно — их проверяет механическая сверка.
+
+## Related
+
+- [[wiki/related-page]] — почему связано
+
+## Sources
+
+- [[raw/articles/<файл>.md]]@<полный_sha256>
+"""
 
 JUDGE_PROMPT = """Ты — придирчивый проверяющий фактов. Тебе дан ФРАГМЕНТ-ИСТОЧНИК и УТВЕРЖДЕНИЕ.
 Твоя задача — активно искать причину, по которой утверждение НЕ следует из фрагмента.
@@ -338,6 +372,25 @@ def is_trusted(path: pathlib.Path) -> bool:
 def wiki_pages():
     return [p for p in WIKI.glob("*.md") if p.name not in SKIP]
 
+def cmd_init(args):
+    """Разворачивает структуру волта кросс-платформенно (без shell-команд)."""
+    root = pathlib.Path(args.dir).resolve()
+    dirs = ["raw/articles", "raw/papers", "raw/notes", "raw/images",
+            "wiki/_templates", "outputs", "receipts/raw", "receipts/wiki", "unverified"]
+    for d in dirs:
+        (root / d).mkdir(parents=True, exist_ok=True)
+    files = {
+        "wiki/_templates/page.md": PAGE_TEMPLATE,
+        "wiki/index.md": "# Index\n\nКаталог страниц вики по доменам. Агент читает его первым.\n",
+        "wiki/log.md": "# Log\n\nappend-only лог операций: ## [YYYY-MM-DD] операция | описание | receipt:<id>\n",
+    }
+    for rel, content in files.items():
+        p = root / rel
+        if not p.exists():
+            p.write_text(content, encoding="utf-8")
+    print(f"Волт развёрнут: {root}")
+    print("Дальше: положи CLAUDE.md из репозитория в корень волта, задай TIMELAYER_TOKEN и TL_VERIFIER.")
+
 def cmd_hash(args):
     print(sha256_hex(pathlib.Path(args.path).read_bytes()))
 
@@ -388,6 +441,7 @@ def cmd_audit_all(args):
 def main():
     ap = argparse.ArgumentParser(description="Нотариальный слой корректности для LLM KB")
     sub = ap.add_subparsers(required=True)
+    sp = sub.add_parser("init"); sp.add_argument("dir", nargs="?", default="."); sp.set_defaults(f=cmd_init)
     sp = sub.add_parser("hash");          sp.add_argument("path"); sp.set_defaults(f=cmd_hash)
     sp = sub.add_parser("ingest-source"); sp.add_argument("path"); sp.set_defaults(f=cmd_ingest_source)
     sp = sub.add_parser("verify");        sp.add_argument("note"); sp.set_defaults(f=cmd_verify)

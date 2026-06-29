@@ -39,28 +39,48 @@
 
 ## Быстрый старт
 
+Работает на **Linux, macOS и Windows**. Нужен только Python 3.8+ и одна библиотека.
+
+**1. Зависимости**
 ```bash
-pip install pyyaml                      # единственная внешняя зависимость
-
-# 1. Токен: заведите аккаунт на https://cabinet.timelayer-os.com и выпустите api_token
-export TIMELAYER_TOKEN=<ваш токен>
-
-# 2. Оффлайн-верификатор (нужен для ворот): https://github.com/<org>/timelayer-verifier
-export TL_VERIFIER=/путь/к/timelayer-verifier
-
-# 3. Прогон на готовом примере
-export VAULT=example
-mkdir -p example/receipts/raw example/receipts/wiki example/unverified
-python notary.py ingest-source raw/articles/2026-06-29-sample.md   # заверить источник
-python notary.py verify wiki/sample-page.md                        # → PASS → trusted
-python notary.py audit  wiki/sample-page.md                        # → trusted держится
-#  поправьте число в странице и снова:
-python notary.py audit  wiki/sample-page.md                        # → trusted снят
+pip install -r requirements.txt        # это всего лишь pyyaml; остальное — стандартная библиотека
 ```
+
+**2. Купите квитанции и выпустите токен.** Квитанции — это «топливо» проверки: каждое
+заверение тратит одну. Заведите аккаунт и купите пакет на **https://timelayer-os.com**,
+затем в кабинете https://cabinet.timelayer-os.com выпустите `api_token`.
+
+**3. Скачайте оффлайн-верификатор** под свою ОС (Linux / macOS / Windows) со страницы
+релизов: **https://github.com/TimeLayer-OS/timelayer-verifier/releases**.
+
+**4. Задайте окружение**
+
+Linux / macOS:
+```bash
+export TIMELAYER_TOKEN=<ваш токен>
+export TL_VERIFIER=/путь/к/timelayer-verifier
+```
+Windows (PowerShell):
+```powershell
+$env:TIMELAYER_TOKEN = "<ваш токен>"
+$env:TL_VERIFIER = "C:\путь\к\timelayer-verifier.exe"
+```
+
+**5. Разверните волт и прогоните пример** (одинаково на любой ОС):
+```bash
+python notary.py init my-vault            # создаёт структуру волта без shell-команд
+python notary.py ingest-source example/raw/articles/2026-06-29-sample.md   # заверить источник
+python notary.py verify example/wiki/sample-page.md      # → PASS → trusted
+python notary.py audit  example/wiki/sample-page.md      # → trusted держится
+#  поправьте число в странице — и снова audit → trusted снят
+```
+> Для примера задайте корень волта: `VAULT=example` (Linux/macOS) или
+> `$env:VAULT="example"` (Windows), либо запускайте из папки `example`.
 
 ### Команды
 
 ```
+python notary.py init [dir]                # развернуть структуру волта (кросс-платформенно)
 python notary.py hash <raw-файл>           # sha256 источника (для указателей в wiki)
 python notary.py ingest-source <raw-файл>  # хеш + квитанция источника
 python notary.py verify <wiki-страница>    # grounding + квитанция + ворота trusted
