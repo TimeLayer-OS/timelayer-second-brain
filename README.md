@@ -61,8 +61,11 @@ pip install -r requirements.txt        # this is just pyyaml; everything else is
 notarization spends one. Create an account and buy a pack at **https://timelayer-os.com**,
 then issue an `api_token` in the cabinet at https://cabinet.timelayer-os.com.
 
-**3. Download the offline verifier** for your OS (Linux / macOS / Windows) from the releases
-page: **https://github.com/TimeLayer-OS/timelayer-verifier/releases**.
+**3. Download the offline verifier** for your OS (Linux / macOS / Windows). Use **v1.4.0 or
+later** — it adds the `--expect` content binding the notary uses to grant the full `trusted`
+tier (older verifiers still work but cap pages at `trusted-mechanical`):
+**https://github.com/TimeLayer-OS/timelayer-verifier/releases/tag/v1.4.0**
+(latest: https://github.com/TimeLayer-OS/timelayer-verifier/releases/latest).
 
 **4. Set the environment**
 

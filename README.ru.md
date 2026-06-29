@@ -61,8 +61,11 @@ pip install -r requirements.txt        # это всего лишь pyyaml; ос
 заверение тратит одну. Заведите аккаунт и купите пакет на **https://timelayer-os.com**,
 затем в кабинете https://cabinet.timelayer-os.com выпустите `api_token`.
 
-**3. Скачайте оффлайн-верификатор** под свою ОС (Linux / macOS / Windows) со страницы
-релизов: **https://github.com/TimeLayer-OS/timelayer-verifier/releases**.
+**3. Скачайте оффлайн-верификатор** под свою ОС (Linux / macOS / Windows). Берите **v1.4.0 или
+новее** — в ней появилась привязка к содержимому `--expect`, по которой нотариат выдаёт полный
+тир `trusted` (старые версии тоже работают, но потолок страниц — `trusted-mechanical`):
+**https://github.com/TimeLayer-OS/timelayer-verifier/releases/tag/v1.4.0**
+(последняя: https://github.com/TimeLayer-OS/timelayer-verifier/releases/latest).
 
 **4. Задайте окружение**
 
