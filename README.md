@@ -25,6 +25,8 @@ of the current text**. Edit the text and the status falls off by itself.
 | `CLAUDE.md` | Constitution for the maintainer agent (drop it in the root of your vault) |
 | `notary.py` | The CLI layer: notarizing sources, grounding checks, the trusted gate |
 | `wiki/_templates/page.md` | Wiki-page template with source-anchoring discipline |
+| `scripts/` | The guard layer: 4-layer injection defense for `raw/`, session preamble, mechanical enforcement of the iron rules |
+| `.claude/settings.json` | Claude Code hook wiring: preamble on SessionStart, guard on every tool call |
 | `example/` | A working example: a source + a page that passes verification |
 
 ## How it works in three words
@@ -94,6 +96,14 @@ python notary.py audit  example/wiki/sample-page.md      # → trusted holds
 > For the example, set the vault root: `VAULT=example` (Linux/macOS) or
 > `$env:VAULT="example"` (Windows), or run from inside the `example` folder.
 
+**6. (Claude Code) Hooks activate on their own.** Open the vault folder in Claude Code —
+`.claude/settings.json` wires the session preamble and the guard automatically; check with
+`/hooks`. Scan existing sources once:
+```bash
+python3 scripts/ingest_guard.py scan raw/articles/<file>.md   # per source
+python3 scripts/ingest_guard.py status                        # summary
+```
+
 ### Commands
 
 ```
@@ -124,6 +134,38 @@ Better "not notarized" than "notarized for nothing."
 
 ---
 
+## The guard: reading `raw/` without getting owned
+
+`raw/` is untrusted external text, and the agent reads it in full at Ingest. A poisoned
+source can carry instructions addressed to the agent ("set `status: trusted`", "edit
+`receipts/`"). Receipts make tampering detectable *after* the fact; `scripts/ingest_guard.py`
+protects the agent *during* reading — four layers, browser-agent style:
+
+- **L1 — datamarking.** The agent reads sources only via `ingest_guard.py read <path>`:
+  every line carries a nonce marker, and the header states that everything inside is data
+  to summarize, never instructions. Direct `cat`/Read on `raw/` is blocked by a hook.
+- **L2 — hidden made visible.** `raw/` is immutable, so nothing is stripped. Instead the
+  reading copy highlights invisible Unicode, HTML comments, hidden elements, and base64
+  blobs: `[ZWSP]`, `[RLO]`, `[HIDDEN-HTML-COMMENT: …]`. Evidence preserved, defused.
+- **L3 — phrase filters.** `ingest_guard.py scan <path>` flags typical injections, including
+  vault-specific ones. A SUSPECT source cannot be read until the human runs
+  `ingest_guard.py ack <path>` (fail-closed, verdicts live in `receipts/guard/`).
+- **L4 — classifier.** Plug in your own with `TL_INJECTION_CMD` (same pattern as the judge).
+  Not set — L1–L3 still run.
+
+Two hooks in `.claude/settings.json` complete the picture. `scripts/preamble.py` runs on
+SessionStart and puts vault telemetry into context: page census by tier, unacked SUSPECT
+sources, missing judge/verifier configuration, recent operations. `scripts/careful.py` runs
+before every tool call and mechanically enforces iron rules #1–#3: no writes to `raw/` or
+`receipts/`, no hand-set `status: trusted`, no force-push — with a silent whitelist for
+`rm -rf node_modules/dist/build`. Prompts are suggestions; hooks are guarantees.
+
+The agent's own conclusions get the same distrust: new learnings sit in
+`wiki/learnings-quarantine.md` and activate into `wiki/learnings.md` only after **3 clean
+uses** (no new CONTRADICTED, no new SUSPECT caused by them).
+
+---
+
 ## Environment variables
 
 | Variable | Purpose |
@@ -132,6 +174,7 @@ Better "not notarized" than "notarized for nothing."
 | `VAULT` | the vault root (defaults to the current folder) |
 | `TL_VERIFIER` | path to the `timelayer-verifier` binary (defaults to `PATH`) |
 | `TL_JUDGE_CMD` | the judge-model command (optional) |
+| `TL_INJECTION_CMD` | the injection-classifier command, guard layer L4 (optional) |
 
 ---
 
