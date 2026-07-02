@@ -19,7 +19,9 @@ ROOT = pathlib.Path(os.environ.get("VAULT", ".")).resolve()
 def sh(cmd):
     try:
         r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=5, cwd=ROOT)
-        return r.stdout.strip()
+        # tools (e.g. timelayer-verifier) print usage/help to stderr; capability
+        # probes must see both streams, matching notary.py's detection.
+        return (r.stdout + r.stderr).strip()
     except Exception:
         return ""
 
