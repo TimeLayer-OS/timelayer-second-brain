@@ -270,7 +270,7 @@ SORT status ASC, updated DESC
 
 ### 13. Set up TimeLayer and install the verifier
 
-TimeLayer is a notarial network: you send a fingerprint (a hash), get back a small (<1 KB) receipt, and verify it offline with open-source code. **The content never leaves — only the hash.** There's a ready-made "Tamper-evident Agent Log" product for AI-agent actions.
+TimeLayer is a notarial network: you send a fingerprint (a hash), get back a small (~1.5 KB) receipt, and verify it offline with open-source code. **The content never leaves — only the hash.** There's a ready-made "Tamper-evident Agent Log" product for AI-agent actions.
 
 1. Register in the cabinet (`cabinet.timelayer-os.com`). At the start, 50 free receipts.
 2. Get an **API token** (keep it narrow and separate — "keys, not prompts").

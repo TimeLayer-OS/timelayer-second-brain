@@ -88,7 +88,7 @@ The script assigns one of two trust tiers (you never set either yourself). Full 
   - *no crypto binding* — the installed verifier can't bind to `H` (no `--expect`), so the tie to
     content rests on the plaintext `bound_hash`; **a holder of a vault write key could forge it**
     by rewriting `bound_hash` and reusing any valid receipt. (ISSUE #1 — closed by verifier
-    v1.4.0; auto-upgrades to `trusted` once that verifier is installed and the page re-certified.)
+    v2.0.0; auto-upgrades to `trusted` once that verifier is installed and the page re-certified.)
   - *no semantic judge* — without `TL_JUDGE_CMD`, a claim passes on mechanical presence alone (the
     number/quote appears in the source) but its **meaning** is unchecked: "demand fell 30%" passes
     against a source that says 30 about growth. Such pages stay `trusted-mechanical` until a judge
