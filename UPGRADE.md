@@ -1,3 +1,34 @@
+# v2.1: lessons from the first day in production — what changed and why
+
+Collected from the first day under real load: three vaults, ~190 claims, a live judge.
+All changes are in `notary.py`; the constitution and the guard are untouched.
+
+- **Judge verdict cache** (`receipts/judge/<sha256>.json`). Key = judge + claim + fragment.
+  A repeat `verify-all` takes seconds instead of hours; editing any part of the key =
+  an honest re-trial. Failed votes (timeout, garbage) are not cached.
+- **Soft quarantine.** Only FAIL (actual falsehood) moves to `unverified/`.
+  NEEDS_SOURCE/NO_CLAIMS (incompleteness) stay in `wiki/` with `status: unverified` and a
+  `verify_note` — the vault doesn't fall apart over a forgotten judge, `index.md` links hold.
+- **`SKIP` extended** with operational pages: `status.md`, `learnings.md`,
+  `learnings-quarantine.md`. A fresh vault passes `verify-all` with zero false errors.
+- **`verify-all` refuses to start blind.** Without `TL_JUDGE_CMD` — refusal with a hint
+  (consent = `--mechanical-only`); with a dead judge (quota, login) — refusal after one
+  smoke vote.
+- **`STALE_HASH`** — a distinct verdict class for a broken pointer (version hash diverged
+  from the file): it used to masquerade as semantic INSUFFICIENT, so people fixed the text
+  instead of the hash.
+- **A read-only page no longer kills the run**: `PermissionError` → "SKIPPED", the check
+  moves on.
+- **Python 3.9 no longer dies cryptically** (`from __future__ import annotations`) — runs
+  with a warning; 3.10+ recommended.
+- **`TL_JUDGE_K`** — the number of judge votes is configurable (default 5).
+- **`scripts/judges/`** — reference judge wrappers; `judge-codex.sh` is battle-tested.
+
+Migration: replace `notary.py` in your vault with the new one — the vault, receipt, and
+pointer formats did not change. The judge cache appears by itself on the first run.
+
+---
+
 # v2: the guard layer — what changed and why
 
 Four architectural patterns applied on top of the notary core. The core — `notary.py`,

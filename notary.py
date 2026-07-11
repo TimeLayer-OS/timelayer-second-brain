@@ -6,6 +6,9 @@ notary.py — нотариальный слой корректности для 
 Окружение:    TIMELAYER_TOKEN  — твой API-токен TimeLayer (узкий, отдельный)
               VAULT            — корень волта (по умолчанию текущая папка)
               TL_VERIFIER      — путь к бинарю timelayer-verifier (по умолчанию из PATH)
+              TL_JUDGE_CMD     — судья смысла: команда stdin=промпт → stdout=JSON
+                                 (референсные обёртки: scripts/judges/)
+              TL_JUDGE_K       — голосов судьи на утверждение (по умолчанию 5)
 
 Команды:
   python notary.py init [dir]               # развернуть структуру волта (кросс-платформенно)
@@ -13,6 +16,7 @@ notary.py — нотариальный слой корректности для 
   python notary.py ingest-source <raw-file> # хеш + квитанция источника  (ступень 1)
   python notary.py verify <wiki-note.md>     # grounding + квитанция + ворота A  (ступени 3–5)
   python notary.py verify-all                # то же по всем страницам wiki/
+                     [--mechanical-only]     # явное согласие на прогон без судьи
   python notary.py audit <wiki-note.md>      # ворота B: снять trusted, если изменено
   python notary.py audit-all
 
@@ -38,8 +42,17 @@ notary.py — нотариальный слой корректности для 
 механические проверки. Мусор в raw/ пройдёт как заверенный мусор.
 """
 
+from __future__ import annotations   # PEP 604 (`dict | None`) в аннотациях — иначе Python 3.9
+                                      # падает криптичным TypeError без намёка на причину
+
 import os, re, sys, json, time, shutil, hashlib, subprocess, argparse, pathlib
 import urllib.request, urllib.error
+
+if sys.version_info < (3, 10):
+    print(f"notary.py: Python {sys.version_info.major}.{sys.version_info.minor} — "
+          "поддерживается ограниченно, рекомендован 3.10+ (тесты гоняются на нём).",
+          file=sys.stderr)
+
 import yaml
 
 VAULT       = pathlib.Path(os.environ.get("VAULT", ".")).resolve()
@@ -48,7 +61,7 @@ RECEIPTS    = VAULT / "receipts"
 UNVERIFIED  = VAULT / "unverified"
 API_NOTARIZE = "https://api.timelayer-os.com/v1/notarize"
 VERIFIER    = os.environ.get("TL_VERIFIER", "timelayer-verifier")
-SKIP        = {"index.md", "log.md"}          # служебные файлы wiki, не страницы
+SKIP        = {"index.md", "log.md", "status.md", "learnings.md", "learnings-quarantine.md"}  # служебные/живые страницы wiki, не знаниевые
 
 PAGE_TEMPLATE = """---
 type: concept
@@ -324,23 +337,60 @@ def judge_once(claim_text: str, fragment: str) -> dict:
         m = re.search(r"\{.*\}", out, re.DOTALL)
         v = json.loads(m.group(0)) if m else {}
     except Exception:
-        return {"cls": "INSUFFICIENT", "span": ""}
+        # _err: сбой судьи (таймаут/падение/мусор вместо JSON), а не смысловой вердикт.
+        # Такой голос НЕ кэшируется — иначе временный сбой сети застынет как INSUFFICIENT.
+        return {"cls": "INSUFFICIENT", "span": "", "_err": True}
     cls = v.get("cls")
     if cls not in ("SUPPORTED", "CONTRADICTED", "INSUFFICIENT"):
-        return {"cls": "INSUFFICIENT", "span": ""}
+        return {"cls": "INSUFFICIENT", "span": "", "_err": True}
     return {"cls": cls, "span": v.get("span", "") or ""}
 
-def check_with_judge(claim, frag, k: int = 5) -> dict:
-    """П5: k сэмплов, единогласие + принудительная цитата-в-фрагменте; иначе эскалация."""
+# ─────────── кэш вердиктов судьи (receipts/judge/) ───────────
+# Ключ = sha256(судья + утверждение + фрагмент): смена текста утверждения, версии источника
+# или команды судьи меняет ключ и вызывает честный пересуд. Неизменная пара не пересуживается —
+# повторный verify-all стоит секунды вместо часов. Один файл на вердикт: параллельные verify
+# не конфликтуют (write-once по ключу, в духе append-only receipts/).
+
+def _judge_cache_path(claim_text: str, fragment: str) -> pathlib.Path:
+    ident = os.environ.get("TL_JUDGE_CMD", "")
+    key = sha256_hex("\x00".join((ident, claim_text, fragment)).encode("utf-8"))
+    return RECEIPTS / "judge" / f"{key}.json"
+
+def check_with_judge(claim, frag, k: int | None = None) -> dict:
+    """П5: k сэмплов, единогласие + принудительная цитата-в-фрагменте; иначе эскалация.
+    Вердикт по неизменной паре (утверждение, фрагмент) берётся из кэша receipts/judge/.
+    k настраивается через TL_JUDGE_K (голоса — самая дорогая часть verify)."""
+    if k is None:
+        try:
+            k = max(1, int(os.environ.get("TL_JUDGE_K", "5") or "5"))
+        except ValueError:
+            k = 5
+    cpath = _judge_cache_path(claim["text"], frag)
+    if cpath.exists():
+        try:
+            c = json.loads(cpath.read_text(encoding="utf-8"))
+            return {"classification": c["classification"],
+                    "evidence_span": c.get("evidence_span", ""),
+                    "agreement": c.get("agreement", "") + "+cache"}
+        except Exception:
+            pass                                     # битый кэш-файл — пересуживаем
     votes = [judge_once(claim["text"], frag) for _ in range(k)]
     classes = {v.get("cls") for v in votes}
     if classes == {"SUPPORTED"} and all(_norm(v.get("span", "")) in _norm(frag) and v.get("span")
                                         for v in votes):
-        return {"classification": "SUPPORTED", "evidence_span": votes[0]["span"][:160],
-                "agreement": f"{k}/{k}"}
-    if "CONTRADICTED" in classes:
-        return {"classification": "CONTRADICTED", "evidence_span": "", "agreement": "split"}
-    return {"classification": "INSUFFICIENT", "evidence_span": "", "agreement": "split"}
+        result = {"classification": "SUPPORTED", "evidence_span": votes[0]["span"][:160],
+                  "agreement": f"{k}/{k}"}
+    elif "CONTRADICTED" in classes:
+        result = {"classification": "CONTRADICTED", "evidence_span": "", "agreement": "split"}
+    else:
+        result = {"classification": "INSUFFICIENT", "evidence_span": "", "agreement": "split"}
+    if not any(v.get("_err") for v in votes):        # сбойные голоса не замораживаем в кэш
+        cpath.parent.mkdir(parents=True, exist_ok=True)
+        cpath.write_text(json.dumps({**result, "ts": now_utc_iso(),
+                                     "claim_sha256": sha256_hex(claim["text"].encode("utf-8")),
+                                     "judge": os.environ.get("TL_JUDGE_CMD", "")},
+                                    ensure_ascii=False, indent=2), encoding="utf-8")
+    return result
 
 # ─────────────── оркестрация проверки одной страницы ───────────────
 
@@ -402,7 +452,7 @@ def find_unanchored(body: str) -> list[str]:
 def rollup(results: list[dict]) -> str:
     if not results:                                                  return "NO_CLAIMS"
     if any(r["classification"] == "CONTRADICTED" for r in results):  return "FAIL"
-    if any(not r["source_hash_ok"] for r in results):               return "FAIL"  # порча источника
+    if any(not r["source_hash_ok"] for r in results):               return "FAIL"  # порча источника / STALE_HASH
     if any(r["classification"] == "INSUFFICIENT" for r in results):  return "NEEDS_SOURCE"
     return "PASS"
 
@@ -412,8 +462,11 @@ def verify_note(path: pathlib.Path) -> dict:
     for c in decompose(body):                                        # П1
         frag, src_ok = fetch_fragment(c["source_ref"], c["source_version"])  # П2
         if not src_ok:
+            # STALE_HASH: битый УКАЗАТЕЛЬ (хеш версии разошёлся с файлом raw/), а не смысловая
+            # ошибка. Раньше падало как INSUFFICIENT и выглядело как «источник не подтверждает
+            # мысль» — чинили текст вместо хеша. Отдельный класс сразу говорит, что чинить.
             results.append({**c, "source_hash_ok": False, "method": "mechanical",
-                            "classification": "INSUFFICIENT", "evidence_span": ""})
+                            "classification": "STALE_HASH", "evidence_span": ""})
             continue
         results.append({**c, "source_hash_ok": True, **route(c, frag)})  # П3–П5
     status = rollup(results)                                          # П6
@@ -555,15 +608,51 @@ def _verify_one(path: pathlib.Path):
                if r["classification"] != "SUPPORTED" or not r["source_hash_ok"]]
         for u in verdict.get("unanchored", []):
             bad.append(f"НЕТ ИСТОЧНИКА: {u[:60]}")     # П3-фикс: показать непривязанную фактуру
-        quarantine(path, verdict["status"] + "; " + " | ".join(bad[:5]))
-        print(f"{verdict['status']:8} {path.name}  → unverified/  ({'; '.join(bad[:3])})")
+        reason = verdict["status"] + "; " + " | ".join(bad[:5])
+        if any(r["classification"] == "STALE_HASH" for r in verdict["claims"]):
+            reason += " | STALE_HASH: чини УКАЗАТЕЛЬ (хеш/строки), не текст; свежий хеш: notary.py hash raw/<файл>"
+        # Мягкий карантин: в unverified/ уезжает только FAIL (противоречие источнику или
+        # порча его версии) — активная ложь изолируется. NEEDS_SOURCE/NO_CLAIMS — неполнота,
+        # не ложь: страница остаётся на месте со статусом unverified и verify_note, ссылки
+        # index.md не бьются.
+        if verdict["status"] == "FAIL":
+            quarantine(path, reason)
+            print(f"{verdict['status']:8} {path.name}  → unverified/  ({'; '.join(bad[:3])})")
+        else:
+            write_frontmatter(path, {"status": "unverified", "verify_note": reason})
+            print(f"{verdict['status']:8} {path.name}  → остаётся в wiki/, unverified  ({'; '.join(bad[:3])})")
 
 def cmd_verify(args):
     _verify_one(pathlib.Path(args.note))
 
+def _judge_smoke_ok() -> bool:
+    """Один тестовый голос перед массовым прогоном: судья должен вернуть парсибельный вердикт.
+       Ловит мёртвого судью (квота провайдера, слетевший логин, сломанная обёртка) ДО того,
+       как 20 страниц молча упадут INSUFFICIENT и прогон уйдёт в мусор."""
+    v = judge_once("Дважды два — четыре.", "Проверка: дважды два — четыре.")
+    return not v.get("_err")
+
 def cmd_verify_all(args):
+    # Тихая ловушка №1: судья не настроен → вся проза падает INSUFFICIENT (fail-closed —
+    # правильно), но выглядит как «база сломана», а не как забытая переменная окружения.
+    # Требуем либо судью, либо явное согласие на потолок trusted-mechanical.
+    if not os.environ.get("TL_JUDGE_CMD") and not getattr(args, "mechanical_only", False):
+        sys.exit("verify-all: судья не настроен (TL_JUDGE_CMD пуст) — все смысловые утверждения\n"
+                 "упадут INSUFFICIENT, потолок страниц: trusted-mechanical.\n"
+                 "Либо настрой судью (референсные обёртки: scripts/judges/),\n"
+                 "либо согласись явно:  notary.py verify-all --mechanical-only")
+    # Тихая ловушка №2: судья настроен, но мёртв (квота, логин, сеть) — сбойные голоса
+    # неотличимы от честного INSUFFICIENT. Один смоук-голос до прогона.
+    if os.environ.get("TL_JUDGE_CMD") and not _judge_smoke_ok():
+        sys.exit("verify-all: TL_JUDGE_CMD задан, но судья не отвечает валидным JSON\n"
+                 "(квота провайдера? слетел логин? сломана обёртка?). Прогон дал бы сплошной\n"
+                 "INSUFFICIENT впустую. Проверь руками:  echo тест | $TL_JUDGE_CMD")
     for p in wiki_pages():
-        _verify_one(p)
+        try:
+            _verify_one(p)
+        except PermissionError as e:
+            # Одна read-only страница не должна ронять проверку остальных.
+            print(f"ПРОПУСК  {p.name}  (нет прав на запись: {getattr(e, 'filename', None) or e}) — продолжаю")
 
 def _audit_one(path: pathlib.Path):
     if not (RECEIPTS / "wiki" / f"{path.stem}.json").exists():
@@ -590,7 +679,10 @@ def cmd_audit(args):
 
 def cmd_audit_all(args):
     for p in wiki_pages():
-        _audit_one(p)
+        try:
+            _audit_one(p)
+        except PermissionError as e:
+            print(f"ПРОПУСК  {p.name}  (нет прав на запись: {getattr(e, 'filename', None) or e}) — продолжаю")
 
 def main():
     ap = argparse.ArgumentParser(description="Нотариальный слой корректности для LLM KB")
@@ -599,7 +691,10 @@ def main():
     sp = sub.add_parser("hash");          sp.add_argument("path"); sp.set_defaults(f=cmd_hash)
     sp = sub.add_parser("ingest-source"); sp.add_argument("path"); sp.set_defaults(f=cmd_ingest_source)
     sp = sub.add_parser("verify");        sp.add_argument("note"); sp.set_defaults(f=cmd_verify)
-    sub.add_parser("verify-all").set_defaults(f=cmd_verify_all)
+    sp = sub.add_parser("verify-all")
+    sp.add_argument("--mechanical-only", action="store_true",
+                    help="явное согласие на прогон без судьи (потолок: trusted-mechanical)")
+    sp.set_defaults(f=cmd_verify_all)
     sp = sub.add_parser("audit");         sp.add_argument("note"); sp.set_defaults(f=cmd_audit)
     sub.add_parser("audit-all").set_defaults(f=cmd_audit_all)
     args = ap.parse_args()

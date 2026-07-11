@@ -112,6 +112,7 @@ python notary.py hash <raw-file>           # sha256 of a source (for pointers in
 python notary.py ingest-source <raw-file>  # hash + source receipt
 python notary.py verify <wiki-page>        # grounding + receipt + trusted gate
 python notary.py verify-all                # same across all wiki/ pages
+                   [--mechanical-only]     # explicit consent to run judge-less
 python notary.py audit  <wiki-page>        # strip trusted if changed after notarization
 python notary.py audit-all
 ```
@@ -131,6 +132,17 @@ Use a **different model family** for the judge than the one that wrote the wiki 
 decorrelation). If `TL_JUDGE_CMD` is not set, semantic claims are marked unverified
 (fail-closed): the page won't get `trusted` until you wire up a judge or confirm it by hand.
 Better "not notarized" than "notarized for nothing."
+
+Working wrappers live in [`scripts/judges/`](scripts/judges/) — e.g. `judge-codex.sh`
+(OpenAI codex CLI), battle-tested. The number of votes per claim is set via `TL_JUDGE_K`
+(default 5). Verdicts are cached in `receipts/judge/` keyed by
+`sha256(judge + claim + fragment)`: an unchanged pair is not re-judged, so a repeat
+`verify-all` costs seconds; editing the claim, the source, or the judge triggers an honest
+re-trial.
+
+Two silent-trap guards: `verify-all` without a judge refuses to start (consent =
+`--mechanical-only` flag), and with a configured but dead judge (provider quota, expired
+login) it fails right after a smoke vote — not after 20 wasted pages.
 
 ---
 
@@ -173,8 +185,29 @@ uses** (no new CONTRADICTED, no new SUSPECT caused by them).
 | `TIMELAYER_TOKEN` | api_token from the cabinet (required to notarize) |
 | `VAULT` | the vault root (defaults to the current folder) |
 | `TL_VERIFIER` | path to the `timelayer-verifier` binary (defaults to `PATH`) |
-| `TL_JUDGE_CMD` | the judge-model command (optional) |
+| `TL_JUDGE_CMD` | the judge-model command (optional; wrappers in `scripts/judges/`) |
+| `TL_JUDGE_K` | judge votes per claim (default 5) |
 | `TL_INJECTION_CMD` | the injection-classifier command, guard layer L4 (optional) |
+
+---
+
+## A fleet of vaults (several brains on one machine)
+
+The typical case is not one vault but several (a vault per project) with shared infrastructure:
+
+```
+~/.timelayer/                  # SHARED, outside the vaults and their backups
+  token                        # API token (chmod 600) — never write it into vault files
+  bin/timelayer-verifier       # one verifier for all vaults
+  venv/                        # python 3.10+ with pyyaml
+  judge-codex.sh               # one judge for all vaults
+brain-project-a/               # a vault = a copy of this template
+brain-project-b/
+```
+
+Each vault carries its own `notary.py`, `CLAUDE.md`, `scripts/`, `receipts/` — vaults don't
+know about each other. Only secrets and binaries are shared. Keep the token outside the
+vaults: vaults get backed up and shared, the token must not.
 
 ---
 
