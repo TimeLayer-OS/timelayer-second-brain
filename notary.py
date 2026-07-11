@@ -45,7 +45,7 @@ notary.py — нотариальный слой корректности для 
 from __future__ import annotations   # PEP 604 (`dict | None`) в аннотациях — иначе Python 3.9
                                       # падает криптичным TypeError без намёка на причину
 
-import os, re, sys, json, time, shutil, hashlib, subprocess, argparse, pathlib
+import os, re, sys, json, time, shutil, shlex, hashlib, subprocess, argparse, pathlib
 import urllib.request, urllib.error
 
 if sys.version_info < (3, 10):
@@ -125,6 +125,16 @@ def now_utc_iso() -> str:
 def canon(o) -> bytes:
     return json.dumps(o, sort_keys=True, ensure_ascii=False).encode("utf-8")
 
+def atomic_write_bytes(path: pathlib.Path, data: bytes):
+    """Атомарная запись (temp + rename): сбой на середине не оставит частичный
+       evidence-файл, который потом сойдёт за целый (П2-07 аудита 2026-07-11)."""
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_bytes(data)
+    os.replace(tmp, path)
+
+def atomic_write_text(path: pathlib.Path, text: str):
+    atomic_write_bytes(path, text.encode("utf-8"))
+
 def split_frontmatter(text: str):
     """Возвращает (frontmatter_dict, body_str). Хеш считаем по body, не по всему файлу,
        чтобы запись receipt_ref/status в frontmatter не ломала само-инвалидацию."""
@@ -140,7 +150,7 @@ def write_frontmatter(path: pathlib.Path, updates: dict):
     fm, body = split_frontmatter(text)
     fm.update(updates)
     dumped = yaml.safe_dump(fm, allow_unicode=True, sort_keys=False).strip()
-    path.write_text(f"---\n{dumped}\n---\n{body}", encoding="utf-8")
+    atomic_write_text(path, f"---\n{dumped}\n---\n{body}")
 
 def body_of(path: pathlib.Path) -> str:
     _, body = split_frontmatter(path.read_text(encoding="utf-8"))
@@ -166,22 +176,37 @@ def notarize(action_hex: str) -> dict:
         sys.exit(f"API /v1/notarize недоступен: {e.reason}")
     # Подтверждено на живом API: ответ = {"cert_hex": "...", "bundle_hex": "..."}.
     # notarized_at API НЕ возвращает (авторитетное время — внутри сертификата).
-    return json.loads(body)
+    # П2-08 аудита: ответ проверяем ДО сохранения — пустой/битый hex не должен
+    # молча превратиться в пустые .tlcert/.tlbundle через значения по умолчанию.
+    data = json.loads(body)
+    cert, bundle = data.get("cert_hex"), data.get("bundle_hex")
+    ok = (isinstance(cert, str) and isinstance(bundle, str)
+          and len(cert) >= 2 and len(bundle) >= 2
+          and len(cert) % 2 == 0 and len(bundle) % 2 == 0)
+    if ok:
+        try:
+            bytes.fromhex(cert); bytes.fromhex(bundle)
+        except ValueError:
+            ok = False
+    if not ok:
+        sys.exit("API /v1/notarize: ответ не по схеме (пустой или не-hex cert_hex/bundle_hex) — "
+                 "квитанция НЕ сохранена (fail-closed).")
+    return data
 
 def save_receipt(kind: str, stem: str, receipt: dict, bound_hash: str, extra: dict | None = None):
     d = RECEIPTS / kind
     d.mkdir(parents=True, exist_ok=True)
     # Подтверждено на живом API: /v1/notarize отдаёт cert_hex/bundle_hex (hex-строки),
     # а timelayer-verifier ждёт СЫРЫЕ БАЙТЫ в .tlcert/.tlbundle — поэтому декодируем hex.
-    (d / f"{stem}.tlcert").write_bytes(bytes.fromhex(receipt.get("cert_hex", "") or ""))
-    (d / f"{stem}.tlbundle").write_bytes(bytes.fromhex(receipt.get("bundle_hex", "") or ""))
+    # Схему ответа проверил notarize() (П2-08); записи атомарные (П2-07).
+    atomic_write_bytes(d / f"{stem}.tlcert", bytes.fromhex(receipt["cert_hex"]))
+    atomic_write_bytes(d / f"{stem}.tlbundle", bytes.fromhex(receipt["bundle_hex"]))
     # API не возвращает notarized_at (авторитетное время лежит внутри сертификата);
     # тут пишем клиентскую метку «когда заверили» только как удобный человекочитаемый след.
     sidecar = {"bound_hash": bound_hash,
                "notarized_at": receipt.get("notarized_at") or now_utc_iso(),
                **(extra or {})}
-    (d / f"{stem}.json").write_text(json.dumps(sidecar, ensure_ascii=False, indent=2),
-                                    encoding="utf-8")
+    atomic_write_text(d / f"{stem}.json", json.dumps(sidecar, ensure_ascii=False, indent=2))
 
 _EXPECT_FLAG = None   # кэш: поддерживает ли установленный verifier привязку к ожидаемому хешу
 
@@ -332,8 +357,12 @@ def judge_once(claim_text: str, fragment: str) -> dict:
         return {"cls": "INSUFFICIENT", "span": ""}
     prompt = _build_judge_prompt(claim_text, fragment)
     try:
-        out = subprocess.run(cmd, shell=True, input=prompt,
-                             capture_output=True, text=True, timeout=120).stdout
+        # П2-04 аудита: без shell=True — команда парсится shlex-ом в argv (никакой
+        # shell-инъекции через конфиг и платформенных расхождений). ~ раскрываем сами.
+        argv = shlex.split(cmd)
+        argv[0] = os.path.expanduser(argv[0])
+        out = subprocess.run(argv, shell=False, input=prompt,
+                             capture_output=True, text=True, timeout=120).stdout[:1_000_000]
         m = re.search(r"\{.*\}", out, re.DOTALL)
         v = json.loads(m.group(0)) if m else {}
     except Exception:
@@ -386,10 +415,13 @@ def check_with_judge(claim, frag, k: int | None = None) -> dict:
         result = {"classification": "INSUFFICIENT", "evidence_span": "", "agreement": "split"}
     if not any(v.get("_err") for v in votes):        # сбойные голоса не замораживаем в кэш
         cpath.parent.mkdir(parents=True, exist_ok=True)
-        cpath.write_text(json.dumps({**result, "ts": now_utc_iso(),
+        # П2-05 аудита: k вызовов ОДНОГО судьи — это repeated sampling, не независимый
+        # кворум; фиксируем честное имя режима в вердикте, чтобы не путали.
+        atomic_write_text(cpath, json.dumps({**result, "ts": now_utc_iso(),
+                                     "mode": "repeated_sampling",
                                      "claim_sha256": sha256_hex(claim["text"].encode("utf-8")),
                                      "judge": os.environ.get("TL_JUDGE_CMD", "")},
-                                    ensure_ascii=False, indent=2), encoding="utf-8")
+                                    ensure_ascii=False, indent=2))
     return result
 
 # ─────────────── оркестрация проверки одной страницы ───────────────
@@ -529,8 +561,13 @@ def certify_note(path: pathlib.Path, verdict: dict) -> str:
 
 def quarantine(path: pathlib.Path, reason: str):
     write_frontmatter(path, {"status": "unverified", "verify_note": reason})
-    UNVERIFIED.mkdir(exist_ok=True)
-    shutil.move(str(path), str(UNVERIFIED / path.name))
+    try:  # вложенная страница уезжает с сохранением подпути — без коллизий имён
+        rel = path.resolve().relative_to(WIKI.resolve())
+    except ValueError:
+        rel = pathlib.Path(path.name)
+    dest = UNVERIFIED / rel
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(path), str(dest))
 
 def is_trusted(path: pathlib.Path) -> str:
     """Ворота B. Возвращает УРОВЕНЬ доверия (строку, не bool):
@@ -563,7 +600,16 @@ def is_trusted(path: pathlib.Path) -> str:
 # ─────────────────────────── команды CLI ───────────────────────────
 
 def wiki_pages():
-    return [p for p in WIKI.glob("*.md") if p.name not in SKIP]
+    """П2-06 аудита: rglob вместо glob — вложенные страницы тоже проверяются.
+       _templates/ — шаблоны, не страницы; симлинк наружу отсекает _within."""
+    out = []
+    for p in sorted(WIKI.rglob("*.md")):
+        if p.name in SKIP or "_templates" in p.relative_to(WIKI).parts:
+            continue
+        if not _within(p, WIKI):
+            continue
+        out.append(p)
+    return out
 
 def cmd_init(args):
     """Разворачивает структуру волта кросс-платформенно (без shell-команд)."""

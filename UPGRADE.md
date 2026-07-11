@@ -27,6 +27,21 @@ All changes are in `notary.py`; the constitution and the guard are untouched.
 Migration: replace `notary.py` in your vault with the new one — the vault, receipt, and
 pointer formats did not change. The judge cache appears by itself on the first run.
 
+## v2.1.1 — hardening per the 2026-07-11 GitHub audit
+
+- **P2-04**: the judge runs without `shell=True` — the command is shlex-parsed
+  into argv (`~` expanded explicitly); judge output capped at 1 MB.
+- **P2-07**: all evidence writes are atomic (temp + rename) — a mid-write crash
+  can't leave a partial .tlcert/.json; side effect: frontmatter updates work on
+  read-only pages too (directory permissions govern; the constitution and hooks
+  are the guard, not chmod).
+- **P2-08**: the /v1/notarize response is validated before saving — empty/non-hex
+  cert_hex/bundle_hex fails closed instead of writing empty receipt files.
+- **P2-05**: judge verdicts carry the honest mode name `repeated_sampling` —
+  k calls to one judge are not passed off as an independent quorum.
+- **P2-06**: `verify-all`/`audit-all` see nested pages (`rglob`), quarantine
+  preserves the subpath; `_templates/` and outside-pointing symlinks excluded.
+
 ---
 
 # v2: the guard layer — what changed and why
