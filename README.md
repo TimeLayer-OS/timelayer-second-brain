@@ -17,6 +17,16 @@ of the current text**. Edit the text and the status falls off by itself.
 
 ---
 
+## Why you might care
+
+- **Your AI notes rot silently.** An LLM-maintained knowledge base drifts: sources change,
+  summaries embellish, and six months later you can't tell which claims still hold. Here
+  "verified" is a receipt over the exact bytes — edit anything and the status falls off itself.
+- **Every claim shows its source**, down to the line range and the source-file hash. "Where
+  did this number come from?" has a one-click answer.
+- **It's just markdown on your disk.** No database, no service; the agent does the
+  bookkeeping, the notary keeps it honest, and you keep the files.
+
 ## What's inside
 
 | File | What it is |
