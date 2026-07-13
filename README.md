@@ -2,6 +2,9 @@
 
 **English** · [Русский](README.ru.md)
 
+> **FOR AGENTS.** Every wiki claim is anchored to a source; `notary.py verify` re-checks it and
+> takes a receipt over the current bytes. Working method: [`AGENTS.md`](AGENTS.md).
+
 **A knowledge base your hand doesn't keep — and that cannot quietly lie.**
 
 Andrej Karpathy's [LLM Knowledge Base](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f)

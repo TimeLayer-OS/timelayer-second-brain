@@ -585,7 +585,7 @@ def is_trusted(path: pathlib.Path) -> str:
          ""           — не trusted: правка после заверения, либо привязка к H не сошлась.
        Это лишь крипто-целостность квитанции. Итоговый тир страницы ('trusted' vs
        'trusted-mechanical') считают certify_note/_audit_one: к 'bound' добавляется
-       требование судьи по смыслу (_fully_judged, ISSUE п.2). С verifier'ом v1.4.0+
+       требование судьи по смыслу (_fully_judged, ISSUE п.2). С verifier'ом v2.0.0+
        (--expect) уровень здесь — 'bound'; 'mechanical' остаётся для старых verifier'ов."""
     fm, _ = split_frontmatter(path.read_text(encoding="utf-8"))
     ref = fm.get("receipt_ref")
