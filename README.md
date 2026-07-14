@@ -2,6 +2,8 @@
 
 **English** · [Русский](README.ru.md)
 
+[![receipt-verified](receipt-verified.svg)](https://github.com/TimeLayer-OS/timelayer-verifier/tree/main/audit/2026-07-14)
+
 > **FOR AGENTS.** Every wiki claim is anchored to a source; `notary.py verify` re-checks it and
 > takes a receipt over the current bytes. Working method: [`AGENTS.md`](AGENTS.md).
 

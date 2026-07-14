@@ -2,6 +2,8 @@
 
 [English](README.md) · **Русский**
 
+[![receipt-verified](receipt-verified.svg)](https://github.com/TimeLayer-OS/timelayer-verifier/tree/main/audit/2026-07-14)
+
 > **ДЛЯ АГЕНТОВ.** Каждое утверждение вики привязано к источнику; `notary.py verify` пере-проверяет
 > его и берёт квитанцию на текущие байты. Метод работы: [`AGENTS.ru.md`](AGENTS.ru.md).
 
